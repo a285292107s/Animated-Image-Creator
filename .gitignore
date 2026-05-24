@@ -85,6 +85,7 @@ typings/
 # Editor folders
 .vscode/
 .idea/
+.trae/
 *.suo
 *.ntvs*
 *.njsproj

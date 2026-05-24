@@ -1,354 +1,51 @@
-import React, { useState, useRef, useCallback, useEffect, useLayoutEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
+import EditModal from './components/EditModal';
+import { useTheme } from './hooks/useTheme';
 import UPNG from 'upng-js';
 import {
   Upload, Trash2, Clock, Download, Sun, Moon,
-  Move, ZoomIn, RotateCcw, X, Play, Minus, Plus, RefreshCw, Wand2, FileVideo, FilePenLine, Github
+  X, Play, Wand2, FileVideo, FilePenLine, Github, Move
 } from 'lucide-react';
 import './App.css';
 import { assembleWebP } from './utils/webp-assembler';
+import { formatSize } from './utils/format';
+import { isAnimatedPNG } from './utils/apng-detector';
+import { parseAPNG } from './utils/apng-parser';
+import { createFrameRenderContext, renderFrameToCanvas } from './utils/render-frames';
+import type { Frame } from './types/frame';
+import { DEFAULT_GLOBAL_DELAY, DEFAULT_APNG_COMPRESSION, DEFAULT_WEBP_QUALITY, FRAME_ANIMATION_DELAY_STEP } from './constants';
 
-const formatSize = (bytes: number) => {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-};
-
-// Helper function to detect if a PNG file is animated
-async function isAnimatedPNG(file: File): Promise<boolean> {
-  const buffer = await file.arrayBuffer();
-  const dataView = new DataView(buffer);
-
-  // Check PNG signature
-  if (dataView.getUint32(0) !== 0x89504E47 || // .PNG
-      dataView.getUint32(4) !== 0x0D0A1A0A) { // ^Z\n (DOS EOF)
-    return false;
-  }
-
-  // Search for acTL chunk (animation control chunk)
-  // acTL must appear before IDAT
-  const maxSearchLength = Math.min(buffer.byteLength, 10000);
-  let i = 8; // Start after PNG signature
-
-  while (i < maxSearchLength - 8) {
-    const chunkLength = dataView.getUint32(i);
-    const chunkType = dataView.getUint32(i + 4);
-
-    if (chunkType === 0x6163544C) { // "acTL" in big-endian hex
-      console.log('Found acTL chunk - this is an animated PNG!');
-      return true;
-    }
-    if (chunkType === 0x49444154) { // "IDAT" - reached image data without finding acTL
-      console.log('Found IDAT chunk without acTL - this is a static PNG');
-      return false;
-    }
-
-    // Skip to next chunk: length(4) + type(4) + data + crc(4)
-    i += 12 + chunkLength;
-  }
-
-  return false;
+function normalizeBaseFrame(frames: Frame[]): Frame[] {
+  if (frames.length === 0) return frames;
+  const result = [...frames];
+  result[0] = { ...result[0], scale: 1, offsetX: 0, offsetY: 0, rotation: 0 };
+  return result;
 }
-
-// Helper function to parse APNG file and extract frames
-async function parseAPNG(file: File): Promise<Frame[]> {
-  const buffer = await file.arrayBuffer();
-  const decoded = UPNG.decode(buffer);
-
-  if (!decoded.frames || decoded.frames.length === 0) {
-    throw new Error('Not a valid animated PNG');
-  }
-
-  const frameData = UPNG.toRGBA8(decoded);
-  const frames: Frame[] = [];
-
-  for (let i = 0; i < frameData.length; i++) {
-    // Convert RGBA data to canvas then to blob
-    const canvas = document.createElement('canvas');
-    canvas.width = decoded.width;
-    canvas.height = decoded.height;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('Could not get canvas context');
-
-    const imageData = new ImageData(
-      new Uint8ClampedArray(frameData[i]),
-      decoded.width,
-      decoded.height
-    );
-    ctx.putImageData(imageData, 0, 0);
-
-    const blob: Blob | null = await new Promise((resolve) => {
-      canvas.toBlob(resolve, 'image/png');
-    });
-
-    if (!blob) throw new Error(`Failed to create blob for frame ${i}`);
-
-    const frameFile = new File([blob], `frame_${i}.png`, { type: 'image/png' });
-
-    frames.push({
-      id: Math.random().toString(36).substr(2, 9),
-      file: frameFile,
-      previewUrl: URL.createObjectURL(blob),
-      delay: decoded.frames[i]?.delay || 100,
-      width: decoded.width,
-      height: decoded.height,
-      offsetX: 0,
-      offsetY: 0,
-      scale: 1,
-      rotation: 0,
-      fileSize: blob.size,
-      fileType: 'PNG'
-    });
-  }
-
-  return frames;
-}
-
-interface Frame {
-  id: string;
-  file: File;
-  previewUrl: string;
-  delay: number;
-  width: number;
-  height: number;
-  offsetX: number;
-  offsetY: number;
-  scale: number;
-  rotation: number;
-  fileSize: number;
-  fileType: string;
-}
-
-interface EditModalProps {
-  frame: Frame;
-  baseWidth: number;
-  baseHeight: number;
-  onSave: (id: string, x: number, y: number, scale: number, rotation: number) => void;
-  onClose: () => void;
-}
-
-const EditModal: React.FC<EditModalProps> = ({ frame, baseWidth, baseHeight, onSave, onClose }) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const wrapperRef = useRef<HTMLDivElement>(null);
-  const [offset, setOffset] = useState({ x: frame.offsetX, y: frame.offsetY });
-  const [scale, setScale] = useState(frame.scale || 1);
-  const [rotation, setRotation] = useState(frame.rotation || 0);
-  const [isDragging, setIsDragging] = useState(false);
-  const [lastPos, setLastPos] = useState({ x: 0, y: 0 });
-  const [imageBitmap, setImageBitmap] = useState<ImageBitmap | null>(null);
-  const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
-  const [viewScale, setViewScale] = useState(1);
-
-  useEffect(() => {
-    document.body.classList.add('modal-open');
-    return () => document.body.classList.remove('modal-open');
-  }, []);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      setScale(prev => {
-        const delta = -e.deltaY * 0.001 * prev;
-        return Math.max(0.01, Math.min(20, prev + delta));
-      });
-    };
-    canvas.addEventListener('wheel', onWheel, { passive: false });
-    return () => canvas.removeEventListener('wheel', onWheel);
-  }, []);
-
-  useEffect(() => {
-    createImageBitmap(frame.file).then(setImageBitmap);
-  }, [frame.file]);
-
-  useLayoutEffect(() => {
-    if (!wrapperRef.current) return;
-    const updateSize = () => {
-      if (!wrapperRef.current) return;
-      const { clientWidth, clientHeight } = wrapperRef.current;
-      setCanvasSize({ width: clientWidth, height: clientHeight });
-      const padding = 40;
-      const fitScale = Math.min((clientWidth - padding) / baseWidth, (clientHeight - padding) / baseHeight);
-      setViewScale(fitScale > 0 ? fitScale : 1);
-    };
-    updateSize();
-    window.addEventListener('resize', updateSize);
-    return () => window.removeEventListener('resize', updateSize);
-  }, [baseWidth, baseHeight]);
-
-  const draw = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !imageBitmap) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const dpr = window.devicePixelRatio || 1;
-    if (canvas.width !== canvasSize.width * dpr || canvas.height !== canvasSize.height * dpr) {
-      canvas.width = canvasSize.width * dpr;
-      canvas.height = canvasSize.height * dpr;
-      ctx.scale(dpr, dpr);
-    }
-    canvas.style.width = `${canvasSize.width}px`;
-    canvas.style.height = `${canvasSize.height}px`;
-
-    const cw = canvasSize.width;
-    const ch = canvasSize.height;
-
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-
-    const baseRectW = baseWidth * viewScale;
-    const baseRectH = baseHeight * viewScale;
-    const baseRectX = (cw - baseRectW) / 2;
-    const baseRectY = (ch - baseRectH) / 2;
-
-    ctx.clearRect(0, 0, cw, ch);
-
-    const gridSize = 15;
-    for (let y = 0; y < ch; y += gridSize) {
-      for (let x = 0; x < cw; x += gridSize) {
-        ctx.fillStyle = (Math.floor(x / gridSize) + Math.floor(y / gridSize)) % 2 === 0 ? '#1a1a1a' : '#222';
-        ctx.fillRect(x, y, gridSize, gridSize);
-      }
-    }
-
-    ctx.save();
-    const cx = (cw / 2) + (offset.x * viewScale);
-    const cy = (ch / 2) + (offset.y * viewScale);
-    ctx.translate(cx, cy);
-    ctx.rotate((rotation * Math.PI) / 180);
-    ctx.scale(scale * viewScale, scale * viewScale);
-    ctx.drawImage(imageBitmap, -imageBitmap.width / 2, -imageBitmap.height / 2);
-    ctx.restore();
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(0, 0, cw, ch);
-    ctx.rect(baseRectX, baseRectY, baseRectW, baseRectH);
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.45)'; 
-    ctx.fill('evenodd');
-    ctx.restore();
-
-    ctx.strokeStyle = '#4c6ef5';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(baseRectX, baseRectY, baseRectW, baseRectH);
-
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
-    ctx.beginPath();
-    ctx.moveTo(cw / 2, baseRectY); ctx.lineTo(cw / 2, baseRectY + baseRectH);
-    ctx.moveTo(baseRectX, ch / 2); ctx.lineTo(baseRectX + baseRectW, ch / 2);
-    ctx.stroke();
-
-  }, [imageBitmap, offset, scale, rotation, viewScale, baseWidth, baseHeight, canvasSize]);
-
-  useEffect(() => { draw(); }, [draw]);
-
-  const handleMouseDown = (e: React.MouseEvent) => {
-    setIsDragging(true);
-    setLastPos({ x: e.clientX, y: e.clientY });
-  };
-
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (!isDragging) return;
-    const dx = e.clientX - lastPos.x;
-    const dy = e.clientY - lastPos.y;
-    setOffset(prev => ({ x: prev.x + dx / viewScale, y: prev.y + dy / viewScale }));
-    setLastPos({ x: e.clientX, y: e.clientY });
-  };
-
-  const handleMouseUp = () => setIsDragging(false);
-
-  const handleReset = () => { setOffset({ x: 0, y: 0 }); setScale(1); setRotation(0); };
-
-  const adjustScale = (amount: number) => setScale(prev => Math.max(0.01, Math.min(20, parseFloat((prev + amount).toFixed(2)))));
-  const adjustRotation = (amount: number) => setRotation(prev => prev + amount);
-
-  return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" onClick={e => e.stopPropagation()}>
-        <div className="modal-header">
-          <h3>Adjust Frame Position</h3>
-          <button className="close-modal-btn" onClick={onClose}><X size={24} /></button>
-        </div>
-        
-        <div className="canvas-wrapper" ref={wrapperRef}>
-          <canvas 
-            ref={canvasRef} 
-            className="canvas-container"
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseUp}
-          />
-        </div>
-
-        <div className="modal-footer">
-          <div className="control-row">
-            <div className="slider-group">
-              <ZoomIn size={18} />
-              <label>Zoom</label>
-              <button className="btn-icon-small" onClick={() => adjustScale(-0.01)}><Minus size={14} /></button>
-              <input 
-                type="range" 
-                min="0.01" max="5" step="0.01" 
-                value={scale} 
-                onChange={(e) => setScale(parseFloat(e.target.value))} 
-                style={{flex: 1}}
-              />
-              <button className="btn-icon-small" onClick={() => adjustScale(0.01)}><Plus size={14} /></button>
-              <span className="value-badge">{(scale * 100).toFixed(0)}%</span>
-            </div>
-
-            <div className="slider-group">
-              <RefreshCw size={18} />
-              <label>Rotate</label>
-              <button className="btn-icon-small" onClick={() => adjustRotation(-90)} title="-90°"><RotateCcw size={14} /></button>
-              <input 
-                type="range" 
-                min="-180" max="180" step="1" 
-                value={rotation} 
-                onChange={(e) => setRotation(parseInt(e.target.value))} 
-                style={{flex: 1}}
-              />
-              <button className="btn-icon-small" onClick={() => adjustRotation(90)} title="+90°"><RefreshCw size={14} /></button>
-              <span className="value-badge">{rotation}°</span>
-            </div>
-          </div>
-          
-          <div className="button-group" style={{marginTop: '1rem'}}>
-            <button className="btn btn-secondary" onClick={handleReset}>Reset All</button>
-            <div style={{flex: 1}}></div>
-            <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
-            <button className="btn btn-primary" onClick={() => onSave(frame.id, offset.x, offset.y, scale, rotation)}>Save Changes</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
 
 function App() {
   const [frames, setFrames] = useState<Frame[]>([]);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
-  const [globalDelay, setGlobalDelay] = useState(100);
+  const [globalDelay, setGlobalDelay] = useState(DEFAULT_GLOBAL_DELAY);
   const [generatedApng, setGeneratedApng] = useState<string | null>(null);
   const [generatedWebP, setGeneratedWebP] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [editingFrame, setEditingFrame] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [draggedFrameId, setDraggedFrameId] = useState<string | null>(null);
-  const [theme, setTheme] = useState<'light' | 'dark'>('light');
-  
-  // New States
+  const { theme, toggleTheme } = useTheme();
+
   const [exportFileName, setExportFileName] = useState("animation");
   const [resultSize, setResultSize] = useState<string | null>(null);
-  const [apngCompression, setApngCompression] = useState(0);
-  const [webpQuality, setWebpQuality] = useState(0.9);
+  const [apngCompression, setApngCompression] = useState(DEFAULT_APNG_COMPRESSION);
+  const [webpQuality, setWebpQuality] = useState(DEFAULT_WEBP_QUALITY);
 
-  useEffect(() => { document.documentElement.setAttribute('data-theme', theme); }, [theme]);
-  const toggleTheme = () => setTheme(prev => prev === 'light' ? 'dark' : 'light');
+  useEffect(() => {
+    const currentFrames = frames;
+    return () => {
+      currentFrames.forEach(f => URL.revokeObjectURL(f.previewUrl));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleFiles = useCallback(async (fileList: FileList | null) => {
     if (!fileList) return;
@@ -358,23 +55,19 @@ function App() {
       const file = fileList[i];
 
       try {
-        // Check for APNG files first - by extension or by detecting acTL chunk
         const isAPNG = file.name.toLowerCase().endsWith('.apng') ||
                       (file.type === 'image/png' && await isAnimatedPNG(file));
 
         if (isAPNG) {
-          console.log(`Processing APNG file: ${file.name}`);
           const apngFrames = await parseAPNG(file);
-          console.log(`Extracted ${apngFrames.length} frames from APNG`);
           newFramesData.push(...apngFrames);
-          continue; // Skip static image processing for this file
+          continue;
         }
 
-        // Process regular image files
         if (!file.type.startsWith('image/')) continue;
         const bmp = await createImageBitmap(file);
         newFramesData.push({
-          id: Math.random().toString(36).substr(2, 9),
+          id: Math.random().toString(36).slice(2, 11),
           file,
           previewUrl: URL.createObjectURL(file),
           delay: globalDelay,
@@ -382,7 +75,7 @@ function App() {
           height: bmp.height,
           offsetX: 0,
           offsetY: 0,
-          scale: 1, // Default scale
+          scale: 1,
           rotation: 0,
           fileSize: file.size,
           fileType: file.type.split('/')[1].toUpperCase().replace('JPEG', 'JPG')
@@ -395,20 +88,9 @@ function App() {
 
     setFrames(prev => {
       const combined = [...prev, ...newFramesData];
-      // Ensure base frame (first frame) always has no transforms applied
-      if (combined.length > 0) {
-        combined[0] = {
-          ...combined[0],
-          scale: 1,
-          offsetX: 0,
-          offsetY: 0,
-          rotation: 0
-        };
-      }
-      return combined;
+      return normalizeBaseFrame(combined);
     });
 
-    // Clear file input value to allow re-uploading the same files
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -420,14 +102,12 @@ function App() {
     const baseH = frames[0].height;
 
     setFrames(prev => prev.map((frame, index) => {
-      if (index === 0) return frame; // Skip base
+      if (index === 0) return frame;
 
-      // Smart Fit: "Cover" logic
-      // Scale image so it fills the base dimensions completely (no black bars)
       const scaleX = baseW / frame.width;
       const scaleY = baseH / frame.height;
       const newScale = Math.max(scaleX, scaleY);
-      
+
       return { ...frame, scale: parseFloat(newScale.toFixed(4)) };
     }));
   };
@@ -435,10 +115,10 @@ function App() {
   const onDragOver = (e: React.DragEvent) => { e.preventDefault(); setIsDraggingFile(true); };
   const onDragLeave = (e: React.DragEvent) => { e.preventDefault(); setIsDraggingFile(false); };
   const onDrop = (e: React.DragEvent) => { e.preventDefault(); setIsDraggingFile(false); handleFiles(e.dataTransfer.files); };
-  const handleClearAll = () => { 
-    setFrames([]); 
-    setGeneratedApng(null); 
-    setGeneratedWebP(null); 
+  const handleClearAll = () => {
+    setFrames([]);
+    setGeneratedApng(null);
+    setGeneratedWebP(null);
     setResultSize(null);
     setExportFileName("animation");
   };
@@ -449,7 +129,6 @@ function App() {
       if (frame) URL.revokeObjectURL(frame.previewUrl);
       const newFrames = prev.filter(f => f.id !== id);
 
-      // If this was the last frame being removed, clear output like Clear All does
       if (newFrames.length === 0) {
         setGeneratedApng(null);
         setGeneratedWebP(null);
@@ -457,24 +136,7 @@ function App() {
         setExportFileName("animation");
       }
 
-      // If we deleted a frame and now only have 1 frame left, reset that frame's scale to 1
-      // This ensures the new base frame is not stuck with Smart Align scale
-      if (newFrames.length === 1) {
-        newFrames[0] = { ...newFrames[0], scale: 1, offsetX: 0, offsetY: 0, rotation: 0 };
-      }
-
-      // Ensure base frame (first frame) always has no transforms applied
-      if (newFrames.length > 0) {
-        newFrames[0] = {
-          ...newFrames[0],
-          scale: 1,
-          offsetX: 0,
-          offsetY: 0,
-          rotation: 0
-        };
-      }
-
-      return newFrames;
+      return normalizeBaseFrame(newFrames);
     });
   };
 
@@ -493,18 +155,7 @@ function App() {
     const [removed] = newFrames.splice(draggedIndex, 1);
     newFrames.splice(targetIndex, 0, removed);
 
-    // Ensure base frame (first frame) always has no transforms applied
-    if (newFrames.length > 0) {
-      newFrames[0] = {
-        ...newFrames[0],
-        scale: 1,
-        offsetX: 0,
-        offsetY: 0,
-        rotation: 0
-      };
-    }
-
-    setFrames(newFrames);
+    setFrames(normalizeBaseFrame(newFrames));
   };
   const handleSortEnd = () => setDraggedFrameId(null);
 
@@ -516,35 +167,15 @@ function App() {
   const generateAPNG = async () => {
     if (frames.length === 0) return;
     setIsGenerating(true);
-    setGeneratedWebP(null); // Clear previous WebP result
+    setGeneratedWebP(null);
     setResultSize(null);
     try {
-      const imageBitmaps = await Promise.all(frames.map(f => createImageBitmap(f.file)));
-      const width = imageBitmaps[0].width;
-      const height = imageBitmaps[0].height;
-      const buffers = [];
+      const { ctx, imageBitmaps, width, height } = await createFrameRenderContext(frames);
+      const buffers: ArrayBuffer[] = [];
       const delays = frames.map(f => f.delay);
-      const canvas = document.createElement('canvas');
-      canvas.width = width; canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) throw new Error("Could not get canvas context");
 
       for (let i = 0; i < frames.length; i++) {
-        const img = imageBitmaps[i];
-        const frame = frames[i];
-        const scale = frame.scale || 1;
-        const rotation = frame.rotation || 0;
-
-        ctx.clearRect(0, 0, width, height);
-        ctx.save();
-        const cx = (width / 2) + frame.offsetX;
-        const cy = (height / 2) + frame.offsetY;
-        ctx.translate(cx, cy);
-        ctx.rotate((rotation * Math.PI) / 180);
-        ctx.scale(scale, scale);
-        ctx.drawImage(img, -img.width / 2, -img.height / 2);
-        ctx.restore();
-        
+        renderFrameToCanvas(ctx, imageBitmaps[i], frames[i], width, height);
         const imageData = ctx.getImageData(0, 0, width, height);
         buffers.push(imageData.data.buffer);
       }
@@ -553,6 +184,7 @@ function App() {
       setResultSize(formatSize(blob.size));
       const url = URL.createObjectURL(blob);
       setGeneratedApng(url);
+      imageBitmaps.forEach(bmp => { try { bmp.close(); } catch {} });
     } catch (err) {
       console.error("Error generating APNG:", err);
       alert("Error generating APNG. Check console for details.");
@@ -564,46 +196,25 @@ function App() {
   const generateWebP = async () => {
     if (frames.length === 0) return;
     setIsGenerating(true);
-    setGeneratedApng(null); // Clear previous APNG result
+    setGeneratedApng(null);
     setResultSize(null);
     try {
-      const imageBitmaps = await Promise.all(frames.map(f => createImageBitmap(f.file)));
-      const width = imageBitmaps[0].width;
-      const height = imageBitmaps[0].height;
+      const { canvas, ctx, imageBitmaps, width, height } = await createFrameRenderContext(frames);
       const webpFrames: { image: Blob; duration: number }[] = [];
-      
-      const canvas = document.createElement('canvas');
-      canvas.width = width; canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) throw new Error("Could not get canvas context");
 
       for (let i = 0; i < frames.length; i++) {
-        const img = imageBitmaps[i];
-        const frame = frames[i];
-        const scale = frame.scale || 1;
-        const rotation = frame.rotation || 0;
-
-        ctx.clearRect(0, 0, width, height);
-        ctx.save();
-        const cx = (width / 2) + frame.offsetX;
-        const cy = (height / 2) + frame.offsetY;
-        ctx.translate(cx, cy);
-        ctx.rotate((rotation * Math.PI) / 180);
-        ctx.scale(scale, scale);
-        ctx.drawImage(img, -img.width / 2, -img.height / 2);
-        ctx.restore();
-        
-        // Export frame as WebP Blob
+        renderFrameToCanvas(ctx, imageBitmaps[i], frames[i], width, height);
         const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/webp', webpQuality));
         if (blob) {
-            webpFrames.push({ image: blob, duration: frame.delay });
+            webpFrames.push({ image: blob, duration: frames[i].delay });
         }
       }
-      
+
       const finalBlob = await assembleWebP(webpFrames, width, height);
       setResultSize(formatSize(finalBlob.size));
       const url = URL.createObjectURL(finalBlob);
       setGeneratedWebP(url);
+      imageBitmaps.forEach(bmp => { try { bmp.close(); } catch {} });
     } catch (err) {
       console.error("Error generating WebP:", err);
       alert("Error generating WebP. Check console.");
@@ -623,9 +234,9 @@ function App() {
           </p>
         </div>
         <div className="header-actions">
-          <a 
-            href="https://github.com/UNLINEARITY/Animated-Image-Creator" 
-            target="_blank" 
+          <a
+            href="https://github.com/UNLINEARITY/Animated-Image-Creator"
+            target="_blank"
             rel="noopener noreferrer"
             className="header-icon-link"
             title="View on GitHub"
@@ -637,7 +248,7 @@ function App() {
           </button>
         </div>
       </header>
-      
+
       <div
         className={`dropzone ${isDraggingFile ? 'active' : ''}`}
         onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
@@ -657,19 +268,19 @@ function App() {
             <div className="control-group">
               <Clock size={18} />
               <label>Global Delay (ms):</label>
-              <input 
-                type="number" 
+              <input
+                type="number"
                 className="frame-delay-input"
                 style={{width: '70px', padding: '0.4rem'}}
-                value={globalDelay} 
+                value={globalDelay}
                 onChange={(e) => {
                   const val = parseInt(e.target.value) || 0;
                   setGlobalDelay(val);
                   setFrames(prev => prev.map(f => ({ ...f, delay: val })));
-                }} 
+                }}
               />
             </div>
-            
+
             <div style={{display: 'flex', gap: '1rem'}}>
               <button className="btn btn-danger" onClick={handleClearAll}>
                 <Trash2 size={18} /> Clear All
@@ -699,15 +310,15 @@ function App() {
                 onDragStart={() => handleSortStart(frame.id)}
                 onDragOver={(e) => handleSortOver(e, frame.id)}
                 onDragEnd={handleSortEnd}
-                style={{ animationDelay: `${Math.min(index * 0.05, 0.5)}s` }}
+                style={{ animationDelay: `${Math.min(index * FRAME_ANIMATION_DELAY_STEP, 0.5)}s` }}
               >
                 {index === 0 && <span className="base-badge">Base</span>}
                 <button className="remove-frame-btn" onClick={() => removeFrame(frame.id)} title="Remove Frame">
                   <X size={14} />
                 </button>
-                
-                <div 
-                  className="frame-preview-container" 
+
+                <div
+                  className="frame-preview-container"
                   onClick={() => index !== 0 && setEditingFrame(frame.id)}
                   title={index === 0 ? "Base frame defines canvas size" : "Click to adjust position"}
                 >
@@ -723,10 +334,10 @@ function App() {
                   <span className="frame-index">#{index + 1}</span>
                   <div className="control-group" style={{gap: '0.4rem'}}>
                     <Clock size={14} color="var(--text-secondary)" />
-                    <input 
-                      type="number" 
+                    <input
+                      type="number"
                       className="frame-delay-input"
-                      value={frame.delay} 
+                      value={frame.delay}
                       onChange={(e) => updateFrameDelay(frame.id, parseInt(e.target.value) || 0)}
                       title="Frame Delay (ms)"
                     />
@@ -742,17 +353,21 @@ function App() {
         </>
       )}
 
-      {editingFrame && (
-        <EditModal frame={frames.find(f => f.id === editingFrame)!} baseWidth={frames[0].width} baseHeight={frames[0].height} onSave={saveFrameOffset} onClose={() => setEditingFrame(null)} />
-      )}
+      {editingFrame && (() => {
+        const frame = frames.find(f => f.id === editingFrame);
+        if (!frame) return null;
+        return <EditModal frame={frame} baseWidth={frames[0].width} baseHeight={frames[0].height} onSave={saveFrameOffset} onClose={() => setEditingFrame(null)} />;
+      })()}
 
-      {(generatedApng || generatedWebP) && (
+      {(generatedApng || generatedWebP) && (() => {
+        const src = generatedApng || generatedWebP!;
+        return (
         <div className="result-section">
           <h2 style={{color: 'var(--text-primary)', marginBottom: '1rem'}}>
             🎉 {generatedApng ? 'APNG' : 'WebP'} Ready!
           </h2>
 
-          <img src={generatedApng || generatedWebP!} className="result-preview" alt="Generated Animation" />
+          <img src={src} className="result-preview" alt="Generated Animation" />
 
           <div className="result-controls" style={{marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem', alignItems: 'center'}}>
             {resultSize && (
@@ -839,14 +454,15 @@ function App() {
                 <span style={{color: 'var(--text-secondary)'}}>.{generatedApng ? 'png' : 'webp'}</span>
             </div>
 
-            <a href={generatedApng || generatedWebP!} download={`${exportFileName}.${generatedApng ? 'png' : 'webp'}`} style={{textDecoration: 'none'}}>
+            <a href={src} download={`${exportFileName}.${generatedApng ? 'png' : 'webp'}`} style={{textDecoration: 'none'}}>
               <button className="btn btn-primary" style={{padding: '0.8rem 2rem', fontSize: '1.1rem'}}>
                 <Download size={20} /> Download
               </button>
             </a>
           </div>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

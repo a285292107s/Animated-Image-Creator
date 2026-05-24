@@ -9,6 +9,10 @@ function uint32(num: number) {
 
 function parseWebP(buffer: ArrayBuffer) {
   const bytes = new Uint8Array(buffer);
+  if (bytes.length < 12) throw new Error('Buffer too small for WebP');
+  const riffHeader = String.fromCharCode(...bytes.slice(0, 4));
+  const webpHeader = String.fromCharCode(...bytes.slice(8, 12));
+  if (riffHeader !== 'RIFF' || webpHeader !== 'WEBP') throw new Error('Not a valid WebP file');
   const chunks: { type: string; data: Uint8Array }[] = [];
   let offset = 12; // Skip RIFF header (12 bytes)
 
@@ -29,10 +33,12 @@ function parseWebP(buffer: ArrayBuffer) {
 }
 
 export async function assembleWebP(frames: { image: Blob; duration: number }[], width: number, height: number): Promise<Blob> {
+  if (!frames.length) throw new Error('No frames provided for WebP assembly');
+  if (width <= 0 || height <= 0) throw new Error(`Invalid dimensions: ${width}x${height}`);
+
   const parts: Uint8Array[] = [];
 
   // 1. VP8X Chunk (Extended WebP Header)
-  // Flags: ANIMATION (bit 1 = 0x02) + ALPHA (bit 4 = 0x10) -> 0x12
   const vp8xData = new Uint8Array(10);
   vp8xData[0] = 0x12; 
   // Canvas Size
@@ -55,31 +61,29 @@ export async function assembleWebP(frames: { image: Blob; duration: number }[], 
   parts.push(animData);
 
   // 3. Process Frames (ANMF Chunks)
-  for (const frame of frames) {
+  const frameChunks = await Promise.all(frames.map(async (frame) => {
     const arrayBuffer = await frame.image.arrayBuffer();
     const subChunks = parseWebP(arrayBuffer);
-    
-    // We only care about VP8, VP8L, ALPH
     const validChunks = subChunks.filter(c => ['VP8 ', 'VP8L', 'ALPH'].includes(c.type));
-    
+    if (validChunks.length === 0) {
+      throw new Error(`Frame has no valid VP8/VP8L/ALPH chunks`);
+    }
     let payloadSize = 0;
     validChunks.forEach(c => {
       payloadSize += 8 + c.data.length + (c.data.length % 2);
     });
+    return { validChunks, payloadSize, duration: frame.duration };
+  }));
 
-    // ANMF Header (16 bytes)
+  const PADDING_BYTE = new Uint8Array([0]);
+
+  for (const { validChunks, payloadSize, duration } of frameChunks) {
     const anmfHeader = new Uint8Array(16);
-    // x, y = 0
-    anmfHeader.set(uint24(wMinus1), 6); // Frame Width - 1
-    anmfHeader.set(uint24(hMinus1), 9); // Frame Height - 1
-    anmfHeader.set(uint24(frame.duration), 12); // Duration
-    anmfHeader[15] = 0x02; // Flags: 00000010 (Blending: Do NOT Blend=0, Disposal: Background=0?)
-    // Actually, for transparency to work correctly in simple stacking:
-    // Blend Method (bit 1): 0=Blend (draw over), 1=No Blend (overwrite).
-    // Disposal Method (bit 0): 0=Do not dispose, 1=Dispose to background.
-    // We want Blend=0 (Composite over previous), Dispose=1 (Clean up? No, usually 0 for animation unless optimizing).
-    // Let's use 0x00 (Blend + No Dispose) which is standard for stacking.
-    
+    anmfHeader.set(uint24(wMinus1), 6);
+    anmfHeader.set(uint24(hMinus1), 9);
+    anmfHeader.set(uint24(duration), 12);
+    anmfHeader[15] = 0x02;
+
     const anmfSize = 16 + payloadSize;
 
     parts.push(new TextEncoder().encode('ANMF'));
@@ -91,7 +95,7 @@ export async function assembleWebP(frames: { image: Blob; duration: number }[], 
       parts.push(uint32(c.data.length));
       parts.push(c.data);
       if (c.data.length % 2 !== 0) {
-        parts.push(new Uint8Array([0])); // Padding
+        parts.push(PADDING_BYTE);
       }
     }
   }

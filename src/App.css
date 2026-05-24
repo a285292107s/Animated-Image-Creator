@@ -816,6 +816,14 @@ h1 {
   gap: 1rem;
 }
 
+.modal-footer .button-group {
+  margin-top: 1rem;
+}
+
+.button-group-spacer {
+  flex: 1;
+}
+
 /* Result */
 .result-section {
   background: var(--bg-secondary);
@@ -868,10 +876,6 @@ h1 {
 }
 
 /* Loading Spinner */
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
 .loading-spinner {
   display: inline-block;
   width: 20px;
