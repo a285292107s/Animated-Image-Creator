@@ -3,7 +3,7 @@ import EditModal from './components/EditModal';
 import { useTheme } from './hooks/useTheme';
 import UPNG from 'upng-js';
 import {
-  Upload, Trash2, Clock, Download, Sun, Moon,
+  Upload, Trash2, Clock, Download, Sun, Moon, HelpCircle,
   X, Play, Wand2, FileVideo, FilePenLine, Github, Move
 } from 'lucide-react';
 import './App.css';
@@ -12,7 +12,10 @@ import { formatSize } from './utils/format';
 import { isAnimatedPNG } from './utils/apng-detector';
 import { parseAPNG } from './utils/apng-parser';
 import { createFrameRenderContext, renderFrameToCanvas } from './utils/render-frames';
+import { isAnimatedImageFormatSupported, isAnimatedImage, decodeAnimatedImage } from './utils/animated-image-decoder';
+import { parseMP4 } from './utils/mp4-parser';
 import type { Frame } from './types/frame';
+import HelpPanel from './components/HelpPanel';
 import { DEFAULT_GLOBAL_DELAY, DEFAULT_APNG_COMPRESSION, DEFAULT_WEBP_QUALITY, FRAME_ANIMATION_DELAY_STEP } from './constants';
 
 function normalizeBaseFrame(frames: Frame[]): Frame[] {
@@ -38,6 +41,7 @@ function App() {
   const [resultSize, setResultSize] = useState<string | null>(null);
   const [apngCompression, setApngCompression] = useState(DEFAULT_APNG_COMPRESSION);
   const [webpQuality, setWebpQuality] = useState(DEFAULT_WEBP_QUALITY);
+  const [showHelp, setShowHelp] = useState(false);
 
   useEffect(() => {
     const currentFrames = frames;
@@ -64,6 +68,20 @@ function App() {
           continue;
         }
 
+        if (isAnimatedImageFormatSupported() && (file.type === 'image/gif' || file.type === 'image/avif' || file.type === 'image/webp')) {
+          if (await isAnimatedImage(file)) {
+            const frames = await decodeAnimatedImage(file);
+            newFramesData.push(...frames);
+            continue;
+          }
+        }
+
+        if (file.type === 'video/mp4' || file.name.toLowerCase().endsWith('.mp4')) {
+          const mp4Frames = await parseMP4(file);
+          newFramesData.push(...mp4Frames);
+          continue;
+        }
+
         if (!file.type.startsWith('image/')) continue;
         const bmp = await createImageBitmap(file);
         newFramesData.push({
@@ -81,8 +99,8 @@ function App() {
           fileType: file.type.split('/')[1].toUpperCase().replace('JPEG', 'JPG')
         });
       } catch (err) {
-        console.error(`Error processing file ${file.name}:`, err);
-        alert(`Error processing ${file.name}: ${err instanceof Error ? err.message : 'Unknown error'}`);
+        console.error(`处理文件 ${file.name} 时出错：`, err);
+        alert(`处理文件 ${file.name} 时出错：${err instanceof Error ? err.message : '未知错误'}`);
       }
     }
 
@@ -186,8 +204,8 @@ function App() {
       setGeneratedApng(url);
       imageBitmaps.forEach(bmp => { try { bmp.close(); } catch {} });
     } catch (err) {
-      console.error("Error generating APNG:", err);
-      alert("Error generating APNG. Check console for details.");
+      console.error("生成 APNG 时出错：", err);
+      alert("生成 APNG 时出错，请查看控制台了解详情。");
     } finally {
       setIsGenerating(false);
     }
@@ -216,8 +234,8 @@ function App() {
       setGeneratedWebP(url);
       imageBitmaps.forEach(bmp => { try { bmp.close(); } catch {} });
     } catch (err) {
-      console.error("Error generating WebP:", err);
-      alert("Error generating WebP. Check console.");
+      console.error("生成 WebP 时出错：", err);
+      alert("生成 WebP 时出错，请查看控制台。");
     } finally {
       setIsGenerating(false);
     }
@@ -228,10 +246,7 @@ function App() {
       <header className="header">
         <div className="header-titles">
           <h1>Animated Image Creator</h1>
-          <p className="header-subtitle">
-            Professional client-side tool to convert static images and APNG files
-            into high-quality animations. Supports PNG, JPG, WebP, and APNG import.
-          </p>
+          <p className="header-subtitle">专业的客户端动图创作工具，支持 PNG、JPG、WebP、GIF、AVIF、APNG、MP4 多种格式导入，一键合成高质量动画。</p>
         </div>
         <div className="header-actions">
           <a
@@ -239,11 +254,14 @@ function App() {
             target="_blank"
             rel="noopener noreferrer"
             className="header-icon-link"
-            title="View on GitHub"
+            title="在 GitHub 上查看"
           >
             <Github size={20} />
           </a>
-          <button className="theme-toggle" onClick={toggleTheme} title="Toggle Theme">
+          <button className="theme-toggle" onClick={() => setShowHelp(true)} title="使用帮助" aria-label="打开使用帮助">
+            <HelpCircle size={20} />
+          </button>
+          <button className="theme-toggle" onClick={toggleTheme} title="切换主题">
             {theme === 'light' ? <Moon size={20} /> : <Sun size={20} />}
           </button>
         </div>
@@ -256,10 +274,10 @@ function App() {
       >
         <Upload size={48} strokeWidth={1.5} className="dropzone-icon" />
         <div>
-          <h3 style={{margin: '0 0 0.5rem 0', color: 'var(--text-primary)'}}>Drag & drop images here</h3>
-          <p style={{margin: 0, fontSize: '0.9rem'}}>Supports PNG, JPG, WebP, APNG • or click to browse files</p>
+          <h3 style={{margin: '0 0 0.5rem 0', color: 'var(--text-primary)'}}>拖拽图片到此处</h3>
+          <p style={{margin: 0, fontSize: '0.9rem'}}>支持 PNG、JPG、WebP、GIF、AVIF、APNG、MP4 · 或点击浏览文件</p>
         </div>
-        <input type="file" ref={fileInputRef} className="file-input" multiple accept="image/*,.apng,.webp" onChange={(e) => handleFiles(e.target.files)} />
+        <input type="file" ref={fileInputRef} className="file-input" multiple accept="image/*,.apng,.webp,.gif,.avif,video/mp4,.mp4" onChange={(e) => handleFiles(e.target.files)} />
       </div>
 
       {frames.length > 0 && (
@@ -267,7 +285,7 @@ function App() {
           <div className="controls-bar">
             <div className="control-group">
               <Clock size={18} />
-              <label>Global Delay (ms):</label>
+              <label>全局延时 (毫秒):</label>
               <input
                 type="number"
                 className="frame-delay-input"
@@ -283,18 +301,18 @@ function App() {
 
             <div style={{display: 'flex', gap: '1rem'}}>
               <button className="btn btn-danger" onClick={handleClearAll}>
-                <Trash2 size={18} /> Clear All
+                <Trash2 size={18} /> 全部清除
               </button>
 
-              <button className="btn btn-secondary" onClick={handleSmartAlign} title="Auto fit larger images to base frame">
-                <Wand2 size={18} /> Smart Align
+              <button className="btn btn-secondary" onClick={handleSmartAlign} title="自动将较大图片适配至基准帧">
+                <Wand2 size={18} /> 智能对齐
               </button>
 
               <div style={{display: 'flex', gap: '0.5rem'}}>
-                <button className="btn btn-primary" onClick={generateAPNG} disabled={isGenerating} title="Generate APNG File">
+                <button className="btn btn-primary" onClick={generateAPNG} disabled={isGenerating} title="生成 APNG 文件">
                   {isGenerating ? <span className="loading-spinner" style={{width: '18px', height: '18px'}}></span> : <><Play size={18} fill="currentColor" /> APNG</>}
                 </button>
-                <button className="btn btn-primary" onClick={generateWebP} disabled={isGenerating} title="Generate WebP File">
+                <button className="btn btn-primary" onClick={generateWebP} disabled={isGenerating} title="生成 WebP 文件">
                   {isGenerating ? <span className="loading-spinner" style={{width: '18px', height: '18px'}}></span> : <><FileVideo size={18} /> WebP</>}
                 </button>
               </div>
@@ -312,17 +330,17 @@ function App() {
                 onDragEnd={handleSortEnd}
                 style={{ animationDelay: `${Math.min(index * FRAME_ANIMATION_DELAY_STEP, 0.5)}s` }}
               >
-                {index === 0 && <span className="base-badge">Base</span>}
-                <button className="remove-frame-btn" onClick={() => removeFrame(frame.id)} title="Remove Frame">
+                {index === 0 && <span className="base-badge">基准帧</span>}
+                <button className="remove-frame-btn" onClick={() => removeFrame(frame.id)} title="移除该帧">
                   <X size={14} />
                 </button>
 
                 <div
                   className="frame-preview-container"
                   onClick={() => index !== 0 && setEditingFrame(frame.id)}
-                  title={index === 0 ? "Base frame defines canvas size" : "Click to adjust position"}
+                  title={index === 0 ? "基准帧：定义画布尺寸" : "点击调整位置"}
                 >
-                  <img src={frame.previewUrl} className="frame-preview" alt={`Frame ${index + 1}`} />
+                  <img src={frame.previewUrl} className="frame-preview" alt={`第 ${index + 1} 帧`} />
                   {index !== 0 && (
                     <div className="edit-overlay">
                       <Move size={24} />
@@ -339,7 +357,7 @@ function App() {
                       className="frame-delay-input"
                       value={frame.delay}
                       onChange={(e) => updateFrameDelay(frame.id, parseInt(e.target.value) || 0)}
-                      title="Frame Delay (ms)"
+                      title="帧延时 (毫秒)"
                     />
                   </div>
                 </div>
@@ -364,15 +382,15 @@ function App() {
         return (
         <div className="result-section">
           <h2 style={{color: 'var(--text-primary)', marginBottom: '1rem'}}>
-            🎉 {generatedApng ? 'APNG' : 'WebP'} Ready!
+            🎉 {generatedApng ? 'APNG' : 'WebP'} 已生成！
           </h2>
 
-          <img src={src} className="result-preview" alt="Generated Animation" />
+          <img src={src} className="result-preview" alt="生成的动画" />
 
           <div className="result-controls" style={{marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem', alignItems: 'center'}}>
             {resultSize && (
                <span style={{fontSize: '0.9rem', color: 'var(--text-secondary)', background: 'var(--bg-secondary)', padding: '4px 12px', borderRadius: '12px', border: '1px solid var(--border-color)'}}>
-                 Size: {resultSize}
+                 文件大小：{resultSize}
                </span>
             )}
 
@@ -380,7 +398,7 @@ function App() {
               {generatedApng ? (
                 <div>
                   <div style={{display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '8px', marginBottom: '0.5rem'}}>
-                    <label style={{fontSize: '0.875rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap'}}>APNG Compression:</label>
+                    <label style={{fontSize: '0.875rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap'}}>APNG 压缩等级：</label>
                     <input
                       type="range"
                       min="0"
@@ -395,10 +413,10 @@ function App() {
                     </span>
                   </div>
                   <div style={{display: 'flex', gap: '0.5rem', justifyContent: 'center'}}>
-                    <button className="btn btn-primary" onClick={generateAPNG} disabled={isGenerating} title="Re-generate APNG">
+                    <button className="btn btn-primary" onClick={generateAPNG} disabled={isGenerating} title="重新生成 APNG">
                       {isGenerating ? <span className="loading-spinner" style={{width: '18px', height: '18px'}}></span> : <>↻ APNG</>}
                     </button>
-                    <button className="btn btn-secondary" onClick={generateWebP} disabled={isGenerating} title="Generate WebP instead">
+                    <button className="btn btn-secondary" onClick={generateWebP} disabled={isGenerating} title="切换为生成 WebP">
                       {isGenerating ? <span className="loading-spinner" style={{width: '18px', height: '18px', borderColor: 'var(--text-secondary)', borderTopColor: 'var(--text-primary)'}}></span> : <><FileVideo size={18} /> WebP</>}
                     </button>
                   </div>
@@ -406,7 +424,7 @@ function App() {
               ) : (
                 <div>
                   <div style={{display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '8px', marginBottom: '0.5rem'}}>
-                    <label style={{fontSize: '0.875rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap'}}>WebP Quality:</label>
+                    <label style={{fontSize: '0.875rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap'}}>WebP 质量：</label>
                     <input
                       type="range"
                       min="0.1"
@@ -421,10 +439,10 @@ function App() {
                     </span>
                   </div>
                   <div style={{display: 'flex', gap: '0.5rem', justifyContent: 'center'}}>
-                    <button className="btn btn-primary" onClick={generateWebP} disabled={isGenerating} title="Re-generate WebP">
+                    <button className="btn btn-primary" onClick={generateWebP} disabled={isGenerating} title="重新生成 WebP">
                       {isGenerating ? <span className="loading-spinner" style={{width: '18px', height: '18px'}}></span> : <>↻ WebP</>}
                     </button>
-                    <button className="btn btn-secondary" onClick={generateAPNG} disabled={isGenerating} title="Generate APNG instead">
+                    <button className="btn btn-secondary" onClick={generateAPNG} disabled={isGenerating} title="切换为生成 APNG">
                       {isGenerating ? <span className="loading-spinner" style={{width: '18px', height: '18px', borderColor: 'var(--text-secondary)', borderTopColor: 'var(--text-primary)'}}></span> : <><Play size={18} fill="currentColor" /> APNG</>}
                     </button>
                   </div>
@@ -456,13 +474,14 @@ function App() {
 
             <a href={src} download={`${exportFileName}.${generatedApng ? 'png' : 'webp'}`} style={{textDecoration: 'none'}}>
               <button className="btn btn-primary" style={{padding: '0.8rem 2rem', fontSize: '1.1rem'}}>
-                <Download size={20} /> Download
+                <Download size={20} /> 下载
               </button>
             </a>
           </div>
         </div>
         );
       })()}
+      {showHelp && <HelpPanel onClose={() => setShowHelp(false)} />}
     </div>
   );
 }

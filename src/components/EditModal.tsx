@@ -146,14 +146,14 @@ const EditModal: React.FC<EditModalProps> = React.memo(({ frame, baseWidth, base
       <div className="modal-content" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
           <h3>Adjust Frame Position</h3>
-          <button className="close-modal-btn" onClick={onClose} aria-label="Close editor"><X size={24} /></button>
+          <button className="close-modal-btn" onClick={onClose} aria-label="关闭编辑器"><X size={24} /></button>
         </div>
 
         <div className="canvas-wrapper" ref={wrapperRef}>
           <canvas
             ref={canvasRef}
             className="canvas-container"
-            aria-label="Frame position editor"
+            aria-label="帧位置编辑器"
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
@@ -165,7 +165,7 @@ const EditModal: React.FC<EditModalProps> = React.memo(({ frame, baseWidth, base
           <div className="control-row">
             <div className="slider-group">
               <ZoomIn size={18} />
-              <label>Zoom</label>
+              <label>缩放</label>
               <button className="btn-icon-small" onClick={() => adjustScale(-0.01)}><Minus size={14} /></button>
               <input
                 type="range"
@@ -180,7 +180,7 @@ const EditModal: React.FC<EditModalProps> = React.memo(({ frame, baseWidth, base
 
             <div className="slider-group">
               <RefreshCw size={18} />
-              <label>Rotate</label>
+              <label>旋转</label>
               <button className="btn-icon-small" onClick={() => adjustRotation(-90)} title="-90°"><RotateCcw size={14} /></button>
               <input
                 type="range"
@@ -195,10 +195,10 @@ const EditModal: React.FC<EditModalProps> = React.memo(({ frame, baseWidth, base
           </div>
 
           <div className="button-group" style={{marginTop: '1rem'}}>
-            <button className="btn btn-secondary" onClick={handleReset}>Reset All</button>
+            <button className="btn btn-secondary" onClick={handleReset}>全部重置</button>
             <div style={{flex: 1}}></div>
-            <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
-            <button className="btn btn-primary" onClick={() => onSave(frame.id, offset.x, offset.y, scale, rotation)}>Save Changes</button>
+            <button className="btn btn-secondary" onClick={onClose}>取消</button>
+            <button className="btn btn-primary" onClick={() => onSave(frame.id, offset.x, offset.y, scale, rotation)}>保存更改</button>
           </div>
         </div>
       </div>

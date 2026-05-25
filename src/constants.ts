@@ -10,3 +10,5 @@ export const OPACITY_DRAG = 0.4;
 
 export const EDIT_MODAL_PADDING = 40;
 export const GRID_SIZE = 15;
+
+export const SUPPORTED_INPUT_FORMATS = 'image/*,.apng,.webp,.gif,.avif,video/mp4,.mp4';

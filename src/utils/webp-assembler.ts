@@ -9,10 +9,10 @@ function uint32(num: number) {
 
 function parseWebP(buffer: ArrayBuffer) {
   const bytes = new Uint8Array(buffer);
-  if (bytes.length < 12) throw new Error('Buffer too small for WebP');
+  if (bytes.length < 12) throw new Error('WebP 数据缓冲区太小');
   const riffHeader = String.fromCharCode(...bytes.slice(0, 4));
   const webpHeader = String.fromCharCode(...bytes.slice(8, 12));
-  if (riffHeader !== 'RIFF' || webpHeader !== 'WEBP') throw new Error('Not a valid WebP file');
+  if (riffHeader !== 'RIFF' || webpHeader !== 'WEBP') throw new Error('不是有效的 WebP 文件');
   const chunks: { type: string; data: Uint8Array }[] = [];
   let offset = 12; // Skip RIFF header (12 bytes)
 
@@ -33,8 +33,8 @@ function parseWebP(buffer: ArrayBuffer) {
 }
 
 export async function assembleWebP(frames: { image: Blob; duration: number }[], width: number, height: number): Promise<Blob> {
-  if (!frames.length) throw new Error('No frames provided for WebP assembly');
-  if (width <= 0 || height <= 0) throw new Error(`Invalid dimensions: ${width}x${height}`);
+  if (!frames.length) throw new Error('没有提供用于组装 WebP 的帧');
+  if (width <= 0 || height <= 0) throw new Error(`无效的尺寸：${width}x${height}`);
 
   const parts: Uint8Array[] = [];
 
@@ -66,7 +66,7 @@ export async function assembleWebP(frames: { image: Blob; duration: number }[], 
     const subChunks = parseWebP(arrayBuffer);
     const validChunks = subChunks.filter(c => ['VP8 ', 'VP8L', 'ALPH'].includes(c.type));
     if (validChunks.length === 0) {
-      throw new Error(`Frame has no valid VP8/VP8L/ALPH chunks`);
+      throw new Error(`帧中没有有效的编码数据`);
     }
     let payloadSize = 0;
     validChunks.forEach(c => {

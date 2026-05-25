@@ -20,7 +20,7 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    console.error('ErrorBoundary caught an error:', error, errorInfo);
+    console.error(`错误边界捕获到异常：`, error, errorInfo);
   }
 
   render() {
@@ -36,9 +36,9 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
           padding: '2rem',
           textAlign: 'center'
         }}>
-          <h1 style={{ fontSize: '1.5rem', marginBottom: '1rem' }}>Something went wrong</h1>
+          <h1 style={{ fontSize: '1.5rem', marginBottom: '1rem' }}>出错了</h1>
           <p style={{ color: '#868e96', marginBottom: '1rem' }}>
-            {this.state.error?.message || 'An unexpected error occurred'}
+            {this.state.error?.message || '发生了意外错误'}
           </p>
           <button
             onClick={() => window.location.reload()}
@@ -52,7 +52,7 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
               fontWeight: 600
             }}
           >
-            Reload Page
+            重新加载页面
           </button>
         </div>
       );

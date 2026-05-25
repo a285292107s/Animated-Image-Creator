@@ -6,7 +6,7 @@ export async function parseAPNG(file: File): Promise<Frame[]> {
   const decoded = UPNG.decode(buffer);
 
   if (!decoded.frames || decoded.frames.length === 0) {
-    throw new Error('Not a valid animated PNG');
+    throw new Error('不是有效的 APNG 动图文件');
   }
 
   const frameData = UPNG.toRGBA8(decoded);
@@ -17,7 +17,7 @@ export async function parseAPNG(file: File): Promise<Frame[]> {
     canvas.width = decoded.width;
     canvas.height = decoded.height;
     const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('Could not get canvas context');
+    if (!ctx) throw new Error('无法获取 Canvas 上下文');
 
     const imageData = new ImageData(
       new Uint8ClampedArray(frameData[i]),
@@ -30,7 +30,7 @@ export async function parseAPNG(file: File): Promise<Frame[]> {
       canvas.toBlob(resolve, 'image/png');
     });
 
-    if (!blob) throw new Error(`Failed to create blob for frame ${i}`);
+    if (!blob) throw new Error(`为第 ${i} 帧创建图像数据失败`);
 
     const frameFile = new File([blob], `frame_${i}.png`, { type: 'image/png' });
 
